@@ -1,0 +1,7 @@
+module AnatomyNative {
+  header "anatomy.h"
+  export *
+  link "anatomy_native"
+  link framework "Metal"
+  link framework "Foundation"
+}
