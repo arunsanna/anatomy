@@ -1,0 +1,250 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Anatomy Canvas</title>
+<style>body{margin:0;background:#101820;color:#dde8ee;font:15px system-ui}main{max-width:1100px;margin:auto;padding:24px}h1{margin:0}p{color:#9eb1bd}canvas{display:block;width:100%;height:60vh;min-height:280px;border:1px solid #38505d;border-radius:12px;touch-action:none}.panel{display:flex;gap:18px;flex-wrap:wrap;padding:14px 0}label{display:grid;gap:6px;min-width:155px;flex:1}input{width:100%}button{background:#253b49;color:#edf8ff;border:1px solid #618396;border-radius:6px;padding:8px 16px}#readouts{font-variant-numeric:tabular-nums;color:#82e1cf}summary{cursor:pointer}small{color:#8ba3b3}</style>
+<main><h1></h1><p id="description"></p><canvas aria-label="Interactive 3D Anatomy figure"></canvas><p id="status" role="status"></p><div id="controls" class="panel"></div><details><summary>Camera</summary><div id="camera" class="panel"></div></details><div class="panel"><button id="play">Play</button><button id="reset">Reset</button><button id="save-svg">Save SVG</button><label>Timeline<input id="time" type="range" min="0" max="10" step="0.01" value="0"></label><output id="timestamp"></output></div><p id="readouts" aria-live="polite"></p><small id="sources"></small></main>
+<!-- MIT License
+
+Copyright (c) 2026 Ryan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+ -->
+<script>const UPSTREAM_LICENSE="MIT License\n\nCopyright (c) 2026 Ryan\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";function evaluateScene(scene, time = 0, inputs = {}) {
+  if (scene.schemaVersion !== 1) throw new Error('Expected scene schemaVersion 1');
+  if (!Number.isFinite(time)) throw new Error('Time must be finite');
+  if (time < 0) throw new Error('Time must be nonnegative');
+  const controls = {};
+  const definitions = scene.controls ?? [];
+  const put = (id, value) => {
+    const control = definitions.find((item) => item.id === id);
+    if (!control) throw new Error(`Unknown control: ${id}`);
+    if (!Number.isFinite(value)) throw new Error(`Control ${id} must be finite`);
+    if (value < control.min || value > control.max) throw new Error(`Control ${id} outside range`);
+    controls[id] = value;
+  };
+  for (const control of definitions) put(control.id, control.value);
+  for (const event of scene.timeline ?? []) if (event.time <= time) put(event.control, event.value);
+  for (const [id, value] of Object.entries(inputs)) put(id, value);
+  const parts = scene.parts.map((part) => ({
+    ...part, position: [...(part.position ?? [0, 0, 0])], rotation: [...(part.rotation ?? [0, 0, 0])],
+    size: [...(part.size ?? [1, 1, 1])], color: [...(part.color ?? [0.65, 0.75, 0.8, 1])],
+    effect: part.effect ?? null, glow: part.effect === 'glow' ? 1 : 0
+  }));
+  for (const binding of scene.bindings ?? []) {
+    const part = parts.find((item) => item.id === binding.part);
+    if (!part || !(binding.control in controls)) throw new Error('Unknown binding reference');
+    const value = controls[binding.control] * (binding.scale ?? 1) + (binding.offset ?? 0);
+    if (binding.property === 'glow') part.glow = value;
+    else {
+      const match = /^(position|rotation|scale)(X|Y|Z)$/.exec(binding.property);
+      if (!match) throw new Error(`Unknown property: ${binding.property}`);
+      const axis = 'XYZ'.indexOf(match[2]);
+      if (match[1] === 'scale') part.size[axis] *= value;
+      else part[match[1]][axis] = value;
+    }
+  }
+  for (const part of parts) {
+    if (part.size.some((n) => !Number.isFinite(n) || n <= 0)) throw new Error('Evaluated size must be positive and finite');
+    if (!Number.isFinite(part.glow) || part.glow < 0) throw new Error('Evaluated glow must be nonnegative and finite');
+  }
+  return {
+    title: scene.title, controls, parts,
+    camera: { yaw: 35, pitch: 25, distance: 8, ...scene.camera },
+    readouts: (scene.readouts ?? []).map((r) => ({ label: r.label,
+      value: controls[r.control] * (r.scale ?? 1) + (r.offset ?? 0), unit: r.unit ?? '' }))
+  };
+}
+function geometryFor(part) {
+  const radians = (degrees) => degrees * Math.PI / 180;
+  const cross = (a, b) => [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+  const normalize = (v) => { const length = Math.hypot(...v); return v.map((n) => n / length); };
+  const rotate = (point, angles) => {
+    let [x,y,z] = point;
+    for (let axis = 0; axis < 3; axis++) {
+      const c = Math.cos(radians(angles[axis])), s = Math.sin(radians(angles[axis]));
+      if (axis === 0) [y,z] = [y*c-z*s,y*s+z*c];
+      if (axis === 1) [x,z] = [x*c+z*s,-x*s+z*c];
+      if (axis === 2) [x,y] = [x*c-y*s,x*s+y*c];
+    }
+    return [x,y,z];
+  };
+  function mesh(part) {
+    const output = [];
+    const triangle = (a,b,c) => {
+      const points = [a,b,c].map((p) => rotate(p.map((n,i) => n*part.size[i]), part.rotation).map((n,i) => n+part.position[i]));
+      const normal = normalize(cross(points[1].map((n,i) => n-points[0][i]), points[2].map((n,i) => n-points[0][i])));
+      for (const point of points) output.push(...point,...normal);
+    };
+    if (part.kind === 'box') {
+      const points = [[-.5,-.5,-.5],[.5,-.5,-.5],[.5,.5,-.5],[-.5,.5,-.5],[-.5,-.5,.5],[.5,-.5,.5],[.5,.5,.5],[-.5,.5,.5]];
+      for (const [a,b,c,d] of [[0,3,2,1],[4,5,6,7],[0,1,5,4],[3,7,6,2],[0,4,7,3],[1,2,6,5]]) { triangle(points[a],points[b],points[c]); triangle(points[a],points[c],points[d]); }
+    } else if (part.kind === 'cylinder') {
+      for (let i=0;i<32;i++) {
+        const a=i*Math.PI/16,b=(i+1)*Math.PI/16;
+        const p=[Math.cos(a)/2,-.5,Math.sin(a)/2],q=[Math.cos(b)/2,-.5,Math.sin(b)/2],r=[q[0],.5,q[2]],s=[p[0],.5,p[2]];
+        triangle(p,r,q); triangle(p,s,r); triangle([0,-.5,0],p,q); triangle([0,.5,0],r,s);
+      }
+    } else if (part.kind === 'sphere') {
+      const point = (lat, lon) => [Math.sin(lat)*Math.cos(lon)/2,Math.cos(lat)/2,Math.sin(lat)*Math.sin(lon)/2];
+      for (let j=0;j<16;j++) for (let i=0;i<32;i++) {
+        const a=point(j*Math.PI/16,i*Math.PI/16),b=point((j+1)*Math.PI/16,i*Math.PI/16),c=point((j+1)*Math.PI/16,(i+1)*Math.PI/16),d=point(j*Math.PI/16,(i+1)*Math.PI/16);
+        if (j !== 0) triangle(a,d,b); if (j !== 15) triangle(b,d,c);
+      }
+    }
+    return new Float32Array(output);
+  }
+  return mesh(part);
+}
+function sceneProjection(camera,width,height) {
+  const radians=(degrees)=>degrees*Math.PI/180;
+  const normalize=(v)=>v.map((n)=>n/Math.hypot(...v));
+  const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+  const dot=(a,b)=>a.reduce((sum,n,i)=>sum+n*b[i],0);
+  const yaw=radians(camera.yaw),pitch=radians(camera.pitch),distance=camera.distance;
+  const eye=[distance*Math.sin(yaw)*Math.cos(pitch),distance*Math.sin(pitch),distance*Math.cos(yaw)*Math.cos(pitch)];
+  const z=normalize(eye),x=normalize(cross([0,1,0],z)),y=cross(z,x);
+  const view=[x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-dot(x,eye),-dot(y,eye),-dot(z,eye),1];
+  const f=1/Math.tan(Math.PI/8),aspect=width/height,near=.1,far=100;
+  const projection=[f/aspect,0,0,0,0,f,0,0,0,0,(far+near)/(near-far),-1,0,0,2*far*near/(near-far),0];
+  const matrix=Array(16).fill(0);
+  for(let col=0;col<4;col++) for(let row=0;row<4;row++) for(let k=0;k<4;k++) matrix[col*4+row]+=projection[k*4+row]*view[col*4+k];
+  return matrix;
+}
+function projectFaces(parts,camera,width,height) {
+  const matrix=sceneProjection(camera,width,height);
+  const normalize=(v)=>v.map((n)=>n/Math.hypot(...v));
+  const dot=(a,b)=>a.reduce((sum,n,i)=>sum+n*b[i],0);
+    const faces = [];
+    for (const part of parts) {
+      const vertices = geometryFor(part);
+      for (let i=0;i<vertices.length;i+=18) {
+        const points = [0,6,12].map((offset) => [...vertices.slice(i+offset,i+offset+3)]);
+        const depth = points.reduce((sum,p) => sum+matrix[3]*p[0]+matrix[7]*p[1]+matrix[11]*p[2]+matrix[15],0)/3;
+        const projected = points.map((p) => {
+          const q=[0,1,2,3].map((row) => matrix[row]*p[0]+matrix[4+row]*p[1]+matrix[8+row]*p[2]+matrix[12+row]);
+          return [(q[0]/q[3]+1)*width/2,(1-q[1]/q[3])*height/2,q[3]];
+        });
+        if (projected.some((p) => p[2]<=0)) continue;
+        const light=.38+.62*Math.max(0,dot([...vertices.slice(i+3,i+6)],normalize([-.4,.8,.6])));
+        faces.push({ depth, projected, alpha:part.color[3], color:part.color.slice(0,3).map((n)=>255*(1-Math.exp(-n*(light+part.glow*.8)*1.4))) });
+      }
+    }
+    faces.sort((a,b)=>b.depth-a.depth);
+  return faces;
+}
+function exportSVG(scene, time = 0, controls = {}) {
+  const state=evaluateScene(scene,time,controls),width=960,height=640;
+  const escape=(value)=>String(value).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+  const faces=projectFaces(state.parts,state.camera,width,height-120);
+  const polygons=faces.map((face)=>`<polygon points="${face.projected.map((p)=>p.slice(0,2).map((n)=>n.toFixed(3)).join(',')).join(' ')}" fill="rgb(${face.color.map(Math.round).join(',')})" fill-opacity="${face.alpha}" stroke="#223747" stroke-width="0.35" stroke-linejoin="round"/>`).join('');
+  const background=(scene.background??[.025,.04,.06,1]).slice(0,3).map((n)=>Math.round(n*255)).join(',');
+  const readouts=state.readouts.map((r)=>`${r.label}: ${Number(r.value.toFixed(3))}${r.unit?' '+r.unit:''}`).join(' · ');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(scene.title)}"><title>${escape(scene.title)}</title><desc>${escape(scene.description??'')} ${escape(readouts)}</desc><!-- ${UPSTREAM_LICENSE} --><rect width="960" height="640" fill="rgb(${background})"/><g transform="translate(0 60)">${polygons}</g><text x="24" y="34" fill="#dde8ee" font-family="system-ui,sans-serif" font-size="22">${escape(scene.title)}</text><text x="24" y="600" fill="#82e1cf" font-family="system-ui,sans-serif" font-size="16">${escape(readouts)}</text><text x="24" y="626" fill="#8ba3b3" font-family="system-ui,sans-serif" font-size="12">Snapshot at ${time.toFixed(2)} s · Anatomy Canvas</text></svg>`;
+}
+(function mount(scene, shaderLibrary, initialControls = {}) {
+  const canvas = document.querySelector('canvas');
+  const status = document.querySelector('#status');
+  const values = { ...initialControls }, camera = { yaw: 35, pitch: 25, distance: 8, ...scene.camera };
+  let time = 0, playing = false, last = null;
+  const timeInput = document.querySelector('#time');
+  timeInput.max = Math.max(10, ...(scene.timeline ?? []).map((event) => event.time));
+  document.querySelector('h1').textContent = scene.title;
+  document.querySelector('#description').textContent = scene.description ?? '';
+  document.querySelector('#sources').textContent = (scene.sources ?? []).join(' · ');
+  const controls = document.querySelector('#controls');
+  for (const control of scene.controls ?? []) {
+    const label = document.createElement('label'), name = document.createElement('span');
+    name.textContent = control.label;
+    const input = document.createElement('input');
+    input.type = 'range'; input.min = control.min; input.max = control.max; input.step = control.step; input.value = control.value;
+    input.setAttribute('aria-label', control.label); input.dataset.control = control.id;
+    input.oninput = () => { values[control.id] = Number(input.value); draw(); };
+    label.append(name, input); controls.append(label);
+  }
+  for (const [name, min, max, step] of [['yaw', -180, 180, 1], ['pitch', -89, 89, 1], ['distance', 1, 30, 0.1]]) {
+    const label = document.createElement('label'), text = document.createElement('span'), input = document.createElement('input');
+    text.textContent = `Camera ${name}`; input.type = 'range'; input.min = min; input.max = max; input.step = step; input.value = camera[name];
+    input.setAttribute('aria-label', text.textContent);
+    input.dataset.camera = name;
+    input.oninput = () => { camera[name] = Number(input.value); draw(); };
+    label.append(text, input); document.querySelector('#camera').append(label);
+  }
+  const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+  const fallback = gl ? null : canvas.getContext('2d');
+  const compile = (type, source) => {
+    const shader = gl.createShader(type); gl.shaderSource(shader, source); gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+    return shader;
+  };
+  let program, buffer, locations;
+  if (gl) {
+    program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, `attribute vec3 aPosition;attribute vec3 aNormal;uniform mat4 uMatrix;varying vec3 vNormal;void main(){vNormal=aNormal;gl_Position=uMatrix*vec4(aPosition,1.);}`));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, shaderLibrary + `varying vec3 vNormal;uniform vec4 uColor;uniform float uGlow;void main(){float light=.38+.62*max(0.,dot(normalize(vNormal),normalize(vec3(-.4,.8,.6))));vec3 color=uColor.rgb*light;float rim=pow(1.-abs(normalize(vNormal).z),3.);color+=uColor.rgb*uGlow*(.8+.6*rim);gl_FragColor=vec4(tonemap(color,1.4),uColor.a);}`));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+    gl.useProgram(program); buffer = gl.createBuffer();
+    locations = Object.fromEntries(['uMatrix', 'uColor', 'uGlow'].map((name) => [name, gl.getUniformLocation(program, name)]));
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+  }
+  function draw() {
+    const state = evaluateScene(scene,time,values);
+    document.querySelector('#readouts').textContent = state.readouts.map((r) => `${r.label}: ${Number(r.value.toFixed(3))} ${r.unit}`).join(' · ');
+    document.querySelector('#timestamp').textContent = `${time.toFixed(2)} s`;
+    for(const input of controls.querySelectorAll('input'))input.value=state.controls[input.dataset.control];
+    for(const input of document.querySelectorAll('[data-camera]'))input.value=camera[input.dataset.camera];
+    canvas.width = Math.max(1,Math.round(canvas.clientWidth*devicePixelRatio)); canvas.height = Math.max(1,Math.round(canvas.clientHeight*devicePixelRatio));
+
+    const matrix=sceneProjection(camera,canvas.width,canvas.height);
+    if (!gl) {
+      if (!fallback) { status.textContent = 'Canvas rendering unavailable'; return; }
+      const bg = scene.background ?? [.025,.04,.06,1];
+      fallback.fillStyle = `rgb(${bg.slice(0,3).map((n) => n*255).join(',')})`;
+      fallback.fillRect(0,0,canvas.width,canvas.height);
+      const faces=projectFaces(state.parts,camera,canvas.width,canvas.height);
+      for(const face of faces) { fallback.beginPath();face.projected.forEach((p,i)=>i?fallback.lineTo(p[0],p[1]):fallback.moveTo(p[0],p[1]));fallback.closePath();fallback.fillStyle=`rgba(${face.color.join(',')},${face.alpha})`;fallback.fill(); }
+      status.textContent='CPU painter fallback · Orbit and readouts active; GPU glow unavailable';
+      return;
+    }
+    gl.viewport(0,0,canvas.width,canvas.height);
+    gl.clearColor(...(scene.background ?? [.025,.04,.06,1])); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.uniformMatrix4fv(locations.uMatrix,false,new Float32Array(matrix));
+    gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+    for (const [name,offset] of [['aPosition',0],['aNormal',12]]) { const location=gl.getAttribLocation(program,name);gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,3,gl.FLOAT,false,24,offset); }
+    for(const part of state.parts) {
+      const vertices=geometryFor(part); gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.DYNAMIC_DRAW);
+      gl.uniform4fv(locations.uColor,part.color);gl.uniform1f(locations.uGlow,part.glow);gl.drawArrays(gl.TRIANGLES,0,vertices.length/6);
+    }
+    status.textContent = '3D depth + GPU glow · Drag to orbit';
+  }
+  document.querySelector('#save-svg').onclick=()=>{
+    const blob=new Blob([exportSVG({...scene,camera:{...camera}},time,values)],{type:'image/svg+xml'});
+    const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='anatomy-snapshot.svg';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  timeInput.oninput=()=>{ time=Number(timeInput.value);draw(); };
+  const play=document.querySelector('#play');
+  play.onclick=()=>{playing=!playing;last=null;play.textContent=playing?'Pause':'Play';if(playing)requestAnimationFrame(tick);};
+  function tick(now) { if(!playing)return;if(last!==null)time=Math.min(Number(timeInput.max),time+(now-last)/1000);last=now;timeInput.value=time;draw();if(time>=Number(timeInput.max)){playing=false;play.textContent='Play';}else requestAnimationFrame(tick); }
+  document.querySelector('#reset').onclick=()=>{playing=false;play.textContent='Play';time=0;timeInput.value=0;for(const key of Object.keys(values))delete values[key];Object.assign(camera,{yaw:35,pitch:25,distance:8,...scene.camera});for(const input of controls.querySelectorAll('input')){const control=(scene.controls??[]).find((c)=>c.id===input.dataset.control);input.value=control.value;}draw();};
+  let pointer;
+  canvas.onpointerdown=(event)=>{pointer=[event.clientX,event.clientY];canvas.setPointerCapture(event.pointerId);};
+  canvas.onpointermove=(event)=>{if(!pointer)return;camera.yaw+=(event.clientX-pointer[0])*.4;camera.pitch=Math.max(-89,Math.min(89,camera.pitch+(event.clientY-pointer[1])*.4));pointer=[event.clientX,event.clientY];draw();};
+  canvas.onpointerup=canvas.onpointercancel=()=>{pointer=null;};
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){playing=false;play.textContent='Play';last=null;}});
+  window.addEventListener('resize',draw);draw();
+})(__ANATOMY_SCENE_JSON__,"precision highp float;\nuniform vec2 uCanvas;\nuniform vec2 uView;\nuniform vec2 uOrigin;\nuniform float uK;\nuniform vec4 uCam;\nuniform float uTime;\nvec2 viewOf(vec2 frag){return vec2(frag.x,uCanvas.y-frag.y)*(uView.x/uCanvas.x);}\nvec2 project(vec3 p){return uOrigin+uK*vec2(p.x*uCam.x-p.y*uCam.y,(p.x*uCam.y+p.y*uCam.x)*uCam.z-p.z*uCam.w);}\nvec3 towardViewer(){return vec3(uCam.y*uCam.w,uCam.x*uCam.w,uCam.z);}\nvec3 rayOf(vec2 vb){vec2 q=(vb-uOrigin)/uK;return vec3(q.x*uCam.x,-q.x*uCam.y,-q.y/uCam.w);}\nfloat pixelOf(){return (uView.x/uCanvas.x)/uK;}\nvec3 lightDir(){return normalize(vec3(-uCam.x,uCam.y,1.2));}\nvec3 onFloor(vec2 vb,float h){vec2 q=(vb-uOrigin)/uK;float b=(q.y+h*uCam.w)/uCam.z;return vec3(q.x*uCam.x+b*uCam.y,-q.x*uCam.y+b*uCam.x,h);}\nvec3 onWallY(vec2 vb,float y){vec2 q=(vb-uOrigin)/uK;float x=(q.x+y*uCam.y)/uCam.x;return vec3(x,y,((x*uCam.y+y*uCam.x)*uCam.z-q.y)/uCam.w);}\nvec3 onWallX(vec2 vb,float x){vec2 q=(vb-uOrigin)/uK;float y=(x*uCam.x-q.x)/uCam.y;return vec3(x,y,((x*uCam.y+y*uCam.x)*uCam.z-q.y)/uCam.w);}\nfloat hash12(vec2 p){vec3 q=fract(vec3(p.xyx)*.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}\nfloat hash13(vec3 p){p=fract(p*.1031);p+=dot(p,p.zyx+31.32);return fract((p.x+p.y)*p.z);}\nfloat noise2(vec2 p){vec2 i=floor(p);vec2 f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash12(i),hash12(i+vec2(1.,0.)),f.x),mix(hash12(i+vec2(0.,1.)),hash12(i+vec2(1.,1.)),f.x),f.y);}\nfloat noise3(vec3 p){vec3 i=floor(p);vec3 f=fract(p);f=f*f*(3.-2.*f);\n  float a=mix(mix(hash13(i),hash13(i+vec3(1.,0.,0.)),f.x),mix(hash13(i+vec3(0.,1.,0.)),hash13(i+vec3(1.,1.,0.)),f.x),f.y);\n  float b=mix(mix(hash13(i+vec3(0.,0.,1.)),hash13(i+vec3(1.,0.,1.)),f.x),mix(hash13(i+vec3(0.,1.,1.)),hash13(i+vec3(1.,1.,1.)),f.x),f.y);\n  return mix(a,b,f.z);}\nfloat fbm2(vec2 p){float s=0.;float a=.5;for(int i=0;i<4;i++){s+=a*noise2(p);p=p*2.07+vec2(17.1,9.2);a*=.5;}return s/.9375;}\nfloat fbm3(vec3 p){float s=0.;float a=.5;for(int i=0;i<4;i++){s+=a*noise3(p);p=p*2.07+vec3(17.1,9.2,4.7);a*=.5;}return s/.9375;}\nfloat window(float x,float a,float b,float soft){return smoothstep(a-soft,a+soft,x)*(1.-smoothstep(b-soft,b+soft,x));}\nvec3 tonemap(vec3 c,float exposure){return 1.-exp(-c*exposure);}\n",__ANATOMY_INITIAL_CONTROLS__);</script></html>
