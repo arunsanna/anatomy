@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "title": "Orbiting a moving assembly",
+  "description": "A bench carriage moves along a guide. Stroke and the displacement readout share one linear control; dimensions are illustrative world units.",
+  "camera": {
+    "yaw": 35,
+    "pitch": 25,
+    "distance": 8
+  },
+  "parts": [
+    {
+      "id": "base",
+      "kind": "box",
+      "position": [
+        0,
+        -1,
+        0
+      ],
+      "size": [
+        4,
+        0.3,
+        2
+      ],
+      "color": [
+        0.3,
+        0.4,
+        0.5,
+        1
+      ]
+    },
+    {
+      "id": "left-post",
+      "kind": "box",
+      "position": [
+        -1.6,
+        -0.3,
+        0
+      ],
+      "size": [
+        0.2,
+        1.2,
+        0.35
+      ],
+      "color": [
+        0.65,
+        0.7,
+        0.74,
+        1
+      ]
+    },
+    {
+      "id": "right-post",
+      "kind": "box",
+      "position": [
+        1.6,
+        -0.3,
+        0
+      ],
+      "size": [
+        0.2,
+        1.2,
+        0.35
+      ],
+      "color": [
+        0.65,
+        0.7,
+        0.74,
+        1
+      ]
+    },
+    {
+      "id": "guide",
+      "kind": "cylinder",
+      "rotation": [
+        0,
+        0,
+        90
+      ],
+      "size": [
+        0.18,
+        3.2,
+        0.18
+      ],
+      "color": [
+        0.8,
+        0.85,
+        0.9,
+        1
+      ]
+    },
+    {
+      "id": "carriage",
+      "kind": "box",
+      "size": [
+        0.7,
+        0.65,
+        0.65
+      ],
+      "color": [
+        0.12,
+        0.65,
+        0.7,
+        1
+      ]
+    },
+    {
+      "id": "lamp",
+      "kind": "sphere",
+      "position": [
+        0,
+        0.7,
+        0
+      ],
+      "size": [
+        0.22,
+        0.22,
+        0.22
+      ],
+      "color": [
+        0.25,
+        0.9,
+        0.65,
+        1
+      ],
+      "effect": "glow"
+    },
+    {
+      "id": "foreground-column",
+      "kind": "cylinder",
+      "position": [
+        0.9,
+        -0.15,
+        0.85
+      ],
+      "size": [
+        0.25,
+        1.4,
+        0.25
+      ],
+      "color": [
+        0.85,
+        0.42,
+        0.25,
+        1
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "id": "stroke",
+      "label": "Stroke",
+      "min": 0,
+      "max": 10,
+      "step": 0.1,
+      "value": 5,
+      "unit": "mm"
+    },
+    {
+      "id": "power",
+      "label": "Lamp intensity",
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "value": 1
+    }
+  ],
+  "bindings": [
+    {
+      "part": "carriage",
+      "control": "stroke",
+      "property": "positionX",
+      "scale": 0.24,
+      "offset": -1.2
+    },
+    {
+      "part": "lamp",
+      "control": "stroke",
+      "property": "positionX",
+      "scale": 0.24,
+      "offset": -1.2
+    },
+    {
+      "part": "lamp",
+      "control": "power",
+      "property": "glow"
+    }
+  ],
+  "readouts": [
+    {
+      "label": "Displacement",
+      "control": "stroke",
+      "unit": "mm"
+    },
+    {
+      "label": "Lamp intensity",
+      "control": "power"
+    }
+  ],
+  "timeline": [
+    {
+      "time": 1,
+      "control": "stroke",
+      "value": 2
+    },
+    {
+      "time": 3,
+      "control": "stroke",
+      "value": 8
+    },
+    {
+      "time": 5,
+      "control": "stroke",
+      "value": 5
+    }
+  ],
+  "sources": [
+    "Illustrative linear carriage model; no measured hardware data.",
+    "Anatomy physical-object method, arunsanna/anatomy@dbf697a."
+  ]
+}

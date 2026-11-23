@@ -1,0 +1,22 @@
+[package]
+name = "anatomy-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "anatomy_native"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError", "NSObject"] }
+objc2-metal = { version = "0.3", default-features = false, features = ["std", "MTLAllocation", "MTLDevice", "MTLResource", "MTLBuffer", "MTLTexture", "MTLTypes", "MTLEvent", "MTLPixelFormat", "MTLLibrary", "MTLRenderPipeline", "MTLRenderCommandEncoder", "MTLCommandEncoder", "MTLCommandBuffer", "MTLCommandQueue", "MTLRenderPass", "MTLDepthStencil", "MTLArgument", "MTLStageInputOutputDescriptor", "MTLVertexDescriptor"] }
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+opt-level = 2
